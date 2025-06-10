@@ -42,17 +42,9 @@ const mdComponents = {
       {children}
     </p>
   ),
-  a: ({ className, children, href, ...props }: MdComponentProps) => (
-    <Badge className="text-xs mx-0.5">
-      <a
-        className={cn("text-blue-400 hover:text-blue-300 text-xs", className)}
-        href={href}
-        target="_blank"
-        rel="noopener noreferrer"
-        {...props}
-      >
-        {children}
-      </a>
+  a: ({ className, children, ...props }: MdComponentProps) => (
+    <Badge className={cn("text-xs mx-0.5 bg-neutral-700 text-neutral-300", className)} {...props}>
+      {children}
     </Badge>
   ),
   ul: ({ className, children, ...props }: MdComponentProps) => (

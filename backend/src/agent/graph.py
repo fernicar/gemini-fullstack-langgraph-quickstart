@@ -92,47 +92,70 @@ def continue_to_web_research(state: QueryGenerationState):
     ]
 
 
-def web_research(state: WebSearchState, config: RunnableConfig) -> OverallState:
-    """LangGraph node that performs web research using the native Google Search API tool.
-
-    Executes a web search using the native Google Search API tool in combination with Gemini 2.0 Flash.
+def read_project_file(file_path: str, node_id: int) -> dict:
+    """Reads the content of a specified project file.
 
     Args:
-        state: Current graph state containing the search query and research loop count
-        config: Configuration for the runnable, including search API settings
+        file_path: The path to the file to be read.
+        node_id: An identifier for the node, potentially used for tracking.
 
     Returns:
-        Dictionary with state update, including sources_gathered, research_loop_count, and web_research_results
+        A dictionary containing the file content and source information.
     """
-    # Configure
-    configurable = Configuration.from_runnable_config(config)
-    formatted_prompt = web_searcher_instructions.format(
-        current_date=get_current_date(),
-        research_topic=state["search_query"],
-    )
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            file_content = f.read()
+        return {
+            "sources_gathered": [{"type": "file", "source": file_path, "content": file_content, "id": node_id}],
+            "web_research_result": [file_content]
+        }
+    except FileNotFoundError:
+        error_message = f"File not found: {file_path}"
+        return {
+            "sources_gathered": [{"type": "file", "source": file_path, "content": error_message, "id": node_id, "error": True}],
+            "web_research_result": [error_message]
+        }
+    except Exception as e:
+        error_message = f"Error reading file {file_path}: {str(e)}"
+        return {
+            "sources_gathered": [{"type": "file", "source": file_path, "content": error_message, "id": node_id, "error": True}],
+            "web_research_result": [error_message]
+        }
 
-    # Uses the google genai client as the langchain client doesn't return grounding metadata
-    response = genai_client.models.generate_content(
-        model=configurable.query_generator_model,
-        contents=formatted_prompt,
-        config={
-            "tools": [{"google_search": {}}],
-            "temperature": 0,
-        },
-    )
-    # resolve the urls to short urls for saving tokens and time
-    resolved_urls = resolve_urls(
-        response.candidates[0].grounding_metadata.grounding_chunks, state["id"]
-    )
-    # Gets the citations and adds them to the generated text
-    citations = get_citations(response, resolved_urls)
-    modified_text = insert_citation_markers(response.text, citations)
-    sources_gathered = [item for citation in citations for item in citation["segments"]]
+
+def web_research(state: WebSearchState, config: RunnableConfig) -> OverallState:
+    """LangGraph node that reads a project file.
+
+    Interprets the search_query as a file path and reads the content of the file.
+
+    Args:
+        state: Current graph state containing the search query (file path) and node id.
+        config: Configuration for the runnable.
+
+    Returns:
+        Dictionary with state update, including sources_gathered and web_research_results.
+    """
+    file_path = state["search_query"]
+    node_id = state["id"]
+
+    # Basic check if it's a path (can be refined)
+    # os.path.exists check is implicitly handled by read_project_file
+    if not isinstance(file_path, str):
+        # Handle non-string file path if necessary
+        # For now, assume valid path or read_project_file handles it.
+        error_message = f"Invalid file path type: {type(file_path)}. Expected a string."
+        return {
+            "sources_gathered": [{"type": "file", "source": "N/A", "content": error_message, "id": node_id, "error": True}],
+            "search_query": [state["search_query"]],
+            "web_research_result": [error_message],
+        }
+
+    file_data = read_project_file(file_path, node_id)
 
     return {
-        "sources_gathered": sources_gathered,
-        "search_query": [state["search_query"]],
-        "web_research_result": [modified_text],
+        "sources_gathered": file_data["sources_gathered"],
+        "search_query": [state["search_query"]], # Keep original query for consistency
+        "web_research_result": file_data["web_research_result"],
     }
 
 
@@ -234,9 +257,7 @@ def finalize_answer(state: OverallState, config: RunnableConfig):
     reasoning_model = state.get("reasoning_model") or configurable.reasoning_model
 
     # Format the prompt
-    current_date = get_current_date()
     formatted_prompt = answer_instructions.format(
-        current_date=current_date,
         research_topic=get_research_topic(state["messages"]),
         summaries="\n---\n\n".join(state["web_research_result"]),
     )
@@ -250,18 +271,9 @@ def finalize_answer(state: OverallState, config: RunnableConfig):
     )
     result = llm.invoke(formatted_prompt)
 
-    # Replace the short urls with the original urls and add all used urls to the sources_gathered
-    unique_sources = []
-    for source in state["sources_gathered"]:
-        if source["short_url"] in result.content:
-            result.content = result.content.replace(
-                source["short_url"], source["value"]
-            )
-            unique_sources.append(source)
-
     return {
         "messages": [AIMessage(content=result.content)],
-        "sources_gathered": unique_sources,
+        "sources_gathered": state["sources_gathered"], # Pass through the file sources
     }
 
 
