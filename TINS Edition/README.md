@@ -106,10 +106,10 @@ The application follows a client-server architecture:
 
 ```mermaid
 graph LR
-    A[User Interface (React Frontend)] -- HTTP/WebSocket (Query via thread.submit) --> B(FastAPI Backend + LangGraph Agent)
+    A["User Interface (React Frontend)"] -- HTTP/WebSocket (Query via thread.submit) --> B(FastAPI Backend + LangGraph Agent)
     B -- HTTP/WebSocket (Streaming Updates & Final Answer via useStream) --> A
     B -- API Call (LLM for Query Gen, Reflection, Answer) --> C{Google Gemini API}
-    B -- File System Read --> D[Project Files (Local)]
+    B -- File System Read --> D["Project Files (Local)"]
 ```
 
 ### Data Structures (Backend Agent State)
