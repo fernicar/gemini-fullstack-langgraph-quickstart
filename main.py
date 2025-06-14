@@ -32,9 +32,13 @@ MODEL_API_MAP = {
     "GPT-4o": "gpt-4o",
 }
 
+# --- Debug Flag for Streaming ---
+DEBUG_STREAM = True # Or False, or load from environment variable
+
+
 # --- Backend Communication Thread ---
 class BackendThread(QThread):
-    new_message_signal = Signal(str, str)  # sender_type ("human", "ai"), content
+    new_message_signal = Signal(str, str)  # sender_type ("human", "ai_partial", "ai_final"), content
     new_activity_signal = Signal(str)      # activity_text
     processing_error_signal = Signal(str)  # error_message
     processing_finished_signal = Signal()  # no args
@@ -74,13 +78,8 @@ class BackendThread(QThread):
             }
 
             self.new_activity_signal.emit(f"Connecting to backend at {backend_url} with thread_id: {self.thread_id}")
-            self.new_activity_signal.emit(f"Payload: {json.dumps(payload, indent=2)}")
+            # self.new_activity_signal.emit(f"Payload: {json.dumps(payload, indent=2)}") # Maybe too verbose for default log
 
-
-            # Using httpx for streaming request
-            # LangServe typically streams JSON objects separated by newlines, or SSEs.
-            # For SSEs, you'd look for `event:` and `data:` lines.
-            # For newline-delimited JSON, you read line by line.
             with httpx.stream("POST", backend_url, json=payload, timeout=None) as response:
                 if response.status_code != 200:
                     error_content = response.read().decode()
@@ -89,76 +88,68 @@ class BackendThread(QThread):
 
                 self.new_activity_signal.emit("Connected. Receiving stream...")
                 for line in response.iter_lines():
+                    if DEBUG_STREAM:
+                        print(f"[RAW_STREAM_DATA] {line}")
+
                     if not self._is_running:
                         self.new_activity_signal.emit("Stream processing interrupted by client.")
                         break
+
                     if line:
                         try:
-                            # Assuming newline-delimited JSON objects from LangServe stream
-                            # Each `line` could be a JSON string representing an event
-                            # e.g. {"event": "on_chat_model_stream", "data": {"chunk": {"content": "..."}}}
-                            # or {"event": "on_tool_start", "data": {"name": "tool_name", "input": ...}}
-                            # or custom events from your graph.
-
-                            # A common pattern is that the entire stream is a sequence of JSON objects,
-                            # each representing an event from the graph execution.
-                            # We need to inspect these objects to decide what to show.
-
                             event_data = json.loads(line)
+
                             event_type = event_data.get("event")
-                            data_content = event_data.get("data", {})
-                            run_name = event_data.get("name", "") # Name of the node/step
+                            data_payload = event_data.get("data", {})
+                            run_name = event_data.get("name", "")
 
-                            # Log generic event for activity timeline
-                            activity_log_entry = f"Event: {event_type}, Node: {run_name}"
-                            if data_content:
-                                # Add some data to the log, but keep it concise
-                                if "chunk" in data_content and isinstance(data_content["chunk"], dict) and "content" in data_content["chunk"]:
-                                     activity_log_entry += f", Chunk: {str(data_content['chunk']['content'])[:30]}..."
-                                elif "input" in data_content:
-                                     activity_log_entry += f", Input: {str(data_content['input'])[:30]}..."
+                            activity_to_log = ""
 
-                            self.new_activity_signal.emit(activity_log_entry)
+                            if event_type:
+                                activity_to_log = f"Event: {event_type}, Node: {run_name}"
+                                chunk_content = data_payload.get("chunk", {}).get("content") if isinstance(data_payload.get("chunk"), dict) else None
 
-                            # Example: Extracting AI messages (modify based on actual stream structure)
-                            # This depends heavily on how your LangGraph agent streams final answers or intermediate messages.
-                            # If it's a chat model stream:
-                            if event_type == "on_chat_model_stream":
-                                if isinstance(data_content.get("chunk"), dict) and "content" in data_content["chunk"]:
-                                    ai_message_part = data_content["chunk"]["content"]
-                                    if ai_message_part: # Ensure it's not an empty string
-                                        # Emit as an AI message. The main thread might need to accumulate these.
-                                        # For now, let's send each part.
-                                        self.new_message_signal.emit("ai_partial", ai_message_part)
+                                if event_type == "on_chat_model_stream" and chunk_content:
+                                    self.new_message_signal.emit("ai_partial", chunk_content)
+                                    activity_to_log += f", AI_Chunk: {str(chunk_content)[:30]}..."
+                                elif event_type == "on_tool_start":
+                                    tool_name = data_payload.get("name", "Unknown Tool")
+                                    tool_input = str(data_payload.get("input", {}))
+                                    activity_to_log += f", ToolStart: {tool_name}, Input: {tool_input[:30]}..."
+                                elif event_type == "on_tool_end":
+                                    tool_name = data_payload.get("name", "Unknown Tool")
+                                    tool_output = str(data_payload.get("output", ""))
+                                    activity_to_log += f", ToolEnd: {tool_name}, Output: {tool_output[:30]}..."
+                                elif event_type == "on_chain_end":
+                                    final_output = data_payload.get("output")
+                                    if isinstance(final_output, dict) and "messages" in final_output:
+                                        for msg in final_output["messages"]:
+                                            if msg.get("type") == "ai" or msg.get("type") == "assistant":
+                                                self.new_message_signal.emit("ai_final", msg.get("content", ""))
+                                                activity_to_log += f", FinalAIMessage: {str(msg.get('content',''))[:30]}..."
+                                                break
+                                    elif isinstance(final_output, str):
+                                         self.new_message_signal.emit("ai_final", final_output)
+                                         activity_to_log += f", FinalOutputStr: {final_output[:30]}..."
 
-                            # If the event indicates a final answer from a specific node:
-                            # This is highly dependent on your graph's structure.
-                            # Let's assume a node named "FinalAnswerNode" (you'd replace this)
-                            # produces the final, complete AI message in its output.
-                            # Or, if the last event from "on_chat_model_stream" implies the end of a message.
-                            # LangGraph might also have an "on_chain_end" or similar for the whole graph.
-                            # For now, we'll rely on `processing_finished_signal` upon stream end.
-                            # And the main window will piece together partial messages if needed.
+                            elif isinstance(event_data, dict) and "messages" in event_data:
+                                messages = event_data["messages"]
+                                if isinstance(messages, list):
+                                    for msg in messages:
+                                        if isinstance(msg, dict) and (msg.get("type") == "ai" or msg.get("type") == "assistant"):
+                                            self.new_message_signal.emit("ai_final", msg.get("content", ""))
+                                            activity_to_log = f"DirectAIMessage: {str(msg.get('content',''))[:30]}..."
+                                            break
+                            else:
+                                activity_to_log = f"UnknownStreamObject: {str(event_data)[:100]}"
 
-                            # Add more specific parsing based on expected events from your LangGraph agent
-                            # e.g., if specific nodes log particular types of activities.
-                            # For instance, if a tool call is made:
-                            if event_type == "on_tool_start":
-                                tool_name = data_content.get("name", "Unknown Tool")
-                                tool_input = str(data_content.get("input", {}))
-                                self.new_activity_signal.emit(f"Tool Started: {tool_name} with input: {tool_input[:50]}...")
-                            elif event_type == "on_tool_end":
-                                tool_name = data_content.get("name", "Unknown Tool")
-                                tool_output = str(data_content.get("output", ""))
-                                self.new_activity_signal.emit(f"Tool Ended: {tool_name}, Output: {tool_output[:50]}...")
-
+                            if activity_to_log:
+                                self.new_activity_signal.emit(activity_to_log)
 
                         except json.JSONDecodeError:
-                            self.new_activity_signal.emit(f"Received non-JSON line: {line[:100]}") # Log it but don't crash
+                            self.new_activity_signal.emit(f"Received non-JSON line: {line[:100]}")
                         except Exception as e:
                             self.new_activity_signal.emit(f"Error processing stream line: {e}")
-
-
         except httpx.RequestError as e:
             self.processing_error_signal.emit(f"Network request failed: {e}")
         except Exception as e:
@@ -333,26 +324,33 @@ class MainWindow(QMainWindow):
     def _update_chat_display(self, sender_type, content):
         if sender_type == "human":
             self.chat_display_area.append(f"<b>You:</b> {content}<br>")
+            self.current_ai_message = "" # Clear any pending AI message when user sends something
         elif sender_type == "ai_partial":
+            if not self.current_ai_message: # First part of a new AI message
+                self.chat_display_area.append(f"<b>AI ({self.model_combo.currentText()}):</b> ") # Start new block
+            self.chat_display_area.insertPlainText(content) # Append text without newline
             self.current_ai_message += content
-            # Update the last AI message in place. This is tricky with QTextBrowser's append.
-            # A more robust way is to remove the last line if it's an AI message and re-append.
-            # For simplicity here, we might append, or if it's the very start of an AI message:
-            if not self.chat_display_area.toPlainText().endswith("</b><br>"): # if last message was not user
-                 # Attempt to update the current AI message block.
-                 # This is a simplification. A proper way would be to track message boundaries.
-                 current_html = self.chat_display_area.toHtml()
-                 # Find last opening <b>AI...</b> tag and replace content up to <br>
-                 # This is too complex for simple replacement, let's just append partials for now
-                 # and finalize when the full message is assumed complete or stream ends.
-                 # self.chat_display_area.append(f"<i>AI partial:</i> {content}") # Temporary
-                 # Or, let's assume for now that the backend sends full messages or we handle accumulation better
-                 self.chat_display_area.append(f"{content}") # This will make stream look like separate messages
+        elif sender_type == "ai_final":
+            if not self.current_ai_message: # If final came as one shot
+                self.chat_display_area.append(f"<b>AI ({self.model_combo.currentText()}):</b> {content}<br>")
+            else: # Finalizing a partial stream
+                # self.chat_display_area.insertPlainText(content) # This would append if content is just the final part
+                # Assuming 'content' here is the FULL final message if different from accumulated
+                # If 'content' is just the last chunk, then current_ai_message already has most of it.
+                # For now, let's assume 'content' is the complete final message.
+                # We need to remove the partially constructed message first. This is hard with QTextBrowser.
+                # A simpler approach for now if content is the full message:
+                # Clear current_ai_message if it was being built, and append the final one.
+                # This might cause a slight flicker or redraw of the AI message.
+                # A truly smooth stream would require more complex QTextCursor manipulation.
 
-            else: # Start of a new AI message block
-                 self.chat_display_area.append(f"<b>AI ({self.model_combo.currentText()}):</b> {content}")
-        elif sender_type == "ai_final": # A signal for a complete AI message
-            self.chat_display_area.append(f"<b>AI ({self.model_combo.currentText()}):</b> {content}<br>")
+                # Simplification: If there was a partial stream, assume `content` is the last chunk.
+                if self.current_ai_message and content != self.current_ai_message : # if content is truly just the last part
+                    self.chat_display_area.insertPlainText(content)
+                elif not self.current_ai_message : # if it's a one-shot final message
+                     self.chat_display_area.append(f"<b>AI ({self.model_combo.currentText()}):</b> {content}")
+
+                self.chat_display_area.append("<br>") # Add the line break
             self.current_ai_message = "" # Reset for next message
         self.chat_display_area.ensureCursorVisible()
 

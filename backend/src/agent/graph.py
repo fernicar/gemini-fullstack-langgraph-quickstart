@@ -89,11 +89,16 @@ def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerati
         # 'query_list' should be a list of strings.
         return {"query_list": [extracted_path]}
     else:
-        # Original LLM-based query generation if the specific test file is not mentioned directly.
-        general_file_path_match = re.search(r"['\"]?(?:[a-zA-Z0-9._-]+/)*[a-zA-Z0-9._-]+\.[a-zA-Z0-9]+['\"]?", research_topic_str)
-        if general_file_path_match:
-            extracted_general_path = general_file_path_match.group(0).strip("'\"")
-            print(f"[generate_query] General file path detected: '{extracted_general_path}'. Refining prompt for LLM.")
+        # General LLM-based query generation
+        print("[generate_query] Attempting LLM-based query generation.")
+        # Ensure `formatted_prompt` is defined correctly here based on prior logic for this block
+        # The following block reconstructs the logic for setting formatted_prompt
+        # current_date is already defined at the start of the function.
+
+        general_file_path_match_in_else = re.search(r"['\"]?(?:[a-zA-Z0-9._-]+/)*[a-zA-Z0-9._-]+\.[a-zA-Z0-9]+['\"]?", research_topic_str)
+        if general_file_path_match_in_else:
+            extracted_general_path = general_file_path_match_in_else.group(0).strip("'\"")
+            print(f"[generate_query] General file path detected (in else): '{extracted_general_path}'. Refining prompt for LLM.")
             formatted_prompt = (
                 f"The user is asking about the file: '{extracted_general_path}'. "
                 f"Your primary task is to confirm this file path. If it seems valid, output it directly as the search query. "
@@ -103,17 +108,32 @@ def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerati
             )
             state["initial_search_query_count"] = 1
         else:
-            print("[generate_query] No specific file path detected in query. Using general query writer prompt.")
-            # current_date is already defined above
+            print("[generate_query] No specific file path detected in query (in else). Using general query writer prompt.")
             formatted_prompt = query_writer_instructions.format(
-                current_date=current_date,
+                current_date=current_date, # current_date was defined at the start of the function
                 research_topic=research_topic_str,
                 number_queries=state["initial_search_query_count"],
             )
+        # End of formatted_prompt setup for this block
 
-        # This part remains the same:
-        result = structured_llm.invoke(formatted_prompt)
-        return {"query_list": result.query}
+        llm_result = structured_llm.invoke(formatted_prompt)
+
+        validated_queries = []
+        if llm_result and llm_result.query: # llm_result.query is List[str]
+            for query_str in llm_result.query:
+                # Simple validation: does it look like a path? (contains '/' or '.' typically)
+                if isinstance(query_str, str) and ('.' in query_str or '/' in query_str) and len(query_str) < 250 and not query_str.endswith("?"):
+                    print(f"[generate_query] LLM generated a potential file path: '{query_str}'")
+                    validated_queries.append(query_str) # Add the string directly
+                else:
+                    print(f"[generate_query] LLM generated a non-path-like query, discarding: '{query_str}'")
+
+        if not validated_queries:
+            print("[generate_query] LLM did not produce any valid-looking file paths. Returning empty query list.")
+            return {"query_list": []} # Return empty list
+        else:
+            # query_list should be List[str]
+            return {"query_list": validated_queries}
 
 
 def continue_to_web_research(state: QueryGenerationState):
