@@ -98,14 +98,16 @@ class BackendThread(QThread):
                     if line:
                         try:
                             event_data = json.loads(line)
-
-                            event_type = event_data.get("event")
-                            data_payload = event_data.get("data", {})
-                            run_name = event_data.get("name", "")
-
                             activity_to_log = ""
+                            message_found_in_line = False
+
+                            # Check for standard LangServe events first
+                            event_type = event_data.get("event")
+                            data_payload = event_data.get("data", {}) # 'data' is common
+                            run_name = event_data.get("name", "")    # 'name' for node
 
                             if event_type:
+                                message_found_in_line = True # Assume event line is handled
                                 activity_to_log = f"Event: {event_type}, Node: {run_name}"
                                 chunk_content = data_payload.get("chunk", {}).get("content") if isinstance(data_payload.get("chunk"), dict) else None
 
@@ -121,27 +123,52 @@ class BackendThread(QThread):
                                     tool_output = str(data_payload.get("output", ""))
                                     activity_to_log += f", ToolEnd: {tool_name}, Output: {tool_output[:30]}..."
                                 elif event_type == "on_chain_end":
-                                    final_output = data_payload.get("output")
-                                    if isinstance(final_output, dict) and "messages" in final_output:
-                                        for msg in final_output["messages"]:
+                                    final_output_data = data_payload.get("output")
+                                    if isinstance(final_output_data, dict) and "messages" in final_output_data:
+                                        for msg in final_output_data["messages"]:
                                             if msg.get("type") == "ai" or msg.get("type") == "assistant":
                                                 self.new_message_signal.emit("ai_final", msg.get("content", ""))
-                                                activity_to_log += f", FinalAIMessage: {str(msg.get('content',''))[:30]}..."
+                                                activity_to_log += f", FinalAIMessage (on_chain_end): {str(msg.get('content',''))[:30]}..."
                                                 break
-                                    elif isinstance(final_output, str):
-                                         self.new_message_signal.emit("ai_final", final_output)
-                                         activity_to_log += f", FinalOutputStr: {final_output[:30]}..."
+                                    elif isinstance(final_output_data, str):
+                                         self.new_message_signal.emit("ai_final", final_output_data)
+                                         activity_to_log += f", FinalOutputStr (on_chain_end): {final_output_data[:30]}..."
+                                # Add other specific event type handling if needed
 
+                            # If not a standard event, check for the final output structure like {"output": {"messages": [...]}}
+                            elif "output" in event_data and isinstance(event_data["output"], dict):
+                                output_content = event_data["output"]
+                                if "messages" in output_content and isinstance(output_content["messages"], list):
+                                    message_found_in_line = True
+                                    for msg_idx, msg_data in enumerate(output_content["messages"]):
+                                        if isinstance(msg_data, dict) and (msg_data.get("type") == "ai" or msg_data.get("type") == "assistant"):
+                                            ai_content = msg_data.get("content", "")
+                                            self.new_message_signal.emit("ai_final", ai_content)
+                                            activity_to_log = f"FinalAIMessage (from output.messages): {ai_content[:30]}..."
+                                            break
+                                    if not activity_to_log:
+                                        activity_to_log = f"OutputFieldParsed: Parsed output.messages but no AI message found."
+
+                                elif not activity_to_log :
+                                     activity_to_log = f"OutputFieldContent: {str(output_content)[:100]}"
+
+
+                            # Fallback for other direct message structures
                             elif isinstance(event_data, dict) and "messages" in event_data:
-                                messages = event_data["messages"]
-                                if isinstance(messages, list):
+                                 message_found_in_line = True
+                                 messages = event_data["messages"]
+                                 if isinstance(messages, list):
                                     for msg in messages:
                                         if isinstance(msg, dict) and (msg.get("type") == "ai" or msg.get("type") == "assistant"):
                                             self.new_message_signal.emit("ai_final", msg.get("content", ""))
-                                            activity_to_log = f"DirectAIMessage: {str(msg.get('content',''))[:30]}..."
+                                            activity_to_log = f"DirectAIMessage (from root.messages): {str(msg.get('content',''))[:30]}..."
                                             break
-                            else:
-                                activity_to_log = f"UnknownStreamObject: {str(event_data)[:100]}"
+                                 if not activity_to_log:
+                                    activity_to_log = f"RootMessagesParsed: Parsed root.messages but no AI message found."
+
+
+                            if not message_found_in_line or not activity_to_log:
+                                activity_to_log = f"UnknownStreamObjectOrNoRelevantData: {str(event_data)[:100]}"
 
                             if activity_to_log:
                                 self.new_activity_signal.emit(activity_to_log)
@@ -149,7 +176,7 @@ class BackendThread(QThread):
                         except json.JSONDecodeError:
                             self.new_activity_signal.emit(f"Received non-JSON line: {line[:100]}")
                         except Exception as e:
-                            self.new_activity_signal.emit(f"Error processing stream line: {e}")
+                            self.new_activity_signal.emit(f"Error processing stream line: {str(e)[:100]}")
         except httpx.RequestError as e:
             self.processing_error_signal.emit(f"Network request failed: {e}")
         except Exception as e:
