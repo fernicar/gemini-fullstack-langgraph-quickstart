@@ -1,0 +1,14 @@
+PySide6==6.9.1
+langgraph>=0.2.6
+langchain>=0.3.19
+langchain-google-genai
+python-dotenv>=1.0.1
+langgraph-sdk>=0.1.57
+langgraph-cli
+fastapi
+google-genai
+pydantic>=2.0.0
+httpx>=0.27.0 # Added based on main.py's usage, common for HTTP clients
+# uvicorn is often used with fastapi for serving, but not explicitly in pyproject.toml's direct dependencies.
+# Adding it as it's a common runtime dependency for a FastAPI backend.
+uvicorn>=0.29.0
