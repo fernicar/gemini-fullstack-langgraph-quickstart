@@ -21,7 +21,6 @@ from PySide6.QtWidgets import (
     QToolBar
 )
 
-DEBUG=True
 
 # --- Backend Communication Thread ---
 class BackendThread(QThread):
@@ -56,6 +55,12 @@ class BackendThread(QThread):
                     "initial_search_query_count": self.effort_params["initial_search_query_count"],
                     "max_research_loops": self.effort_params["max_research_loops"],
                     "reasoning_model": self.model_name, # Ensure this matches backend expectation
+                    # ---- Add missing fields with default values ----
+                    "search_query": [],
+                    "web_research_result": [],
+                    "sources_gathered": [],
+                    "research_loop_count": 0,
+                    # ---------------------------------------------
                 },
                 "config": {
                     "configurable": {"thread_id": self.thread_id}
@@ -246,7 +251,6 @@ class MainWindow(QMainWindow):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Ready.")
-        if DEBUG: print(f"Ready.")
 
         self.handle_new_search()
 
@@ -280,7 +284,6 @@ class MainWindow(QMainWindow):
             self.new_search_button.setEnabled(True)
             self.new_search_action.setEnabled(True)
             self.status_bar.showMessage("Processing stopped by user.", 5000)
-            if DEBUG: print(f"Processing stopped by user.", 5000)
             self.activity_timeline.addItem("Processing stopped by user.")
             self.backend_thread = None # Allow it to be garbage collected after it finishes
         else:
@@ -288,7 +291,6 @@ class MainWindow(QMainWindow):
             query_text = self.query_input.toPlainText().strip()
             if not query_text:
                 self.status_bar.showMessage("Error: Query cannot be empty.", 5000)
-                if DEBUG: print(f"Error: Query cannot be empty.", 5000)
                 return
 
             selected_effort_params = self._get_effort_params()
@@ -306,7 +308,6 @@ class MainWindow(QMainWindow):
             self.new_search_button.setEnabled(False)
             self.new_search_action.setEnabled(False)
             self.status_bar.showMessage("Processing query...")
-            if DEBUG: print(f"Processing query...")
 
             self.activity_timeline.addItem(f"Query submitted (Effort: {self.effort_combo.currentText()}, Model: {selected_model})")
 
@@ -358,14 +359,12 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def _handle_processing_error(self, error_message):
         self.status_bar.showMessage(f"Error: {error_message}", 10000)
-        if DEBUG: print(f"Error: {error_message}", 10000)
         self.activity_timeline.addItem(f"ERROR: {error_message}")
         self._reset_ui_after_processing()
 
     @Slot()
     def _handle_processing_finished(self):
         self.status_bar.showMessage("Processing finished.", 5000)
-        if DEBUG: print(f"Processing finished.", 5000)
         if self.current_ai_message: # If there's an unfinished AI message part
             # This logic might need refinement based on how backend signals end of message
             # self._update_chat_display("ai_final", self.current_ai_message)
@@ -413,7 +412,6 @@ class MainWindow(QMainWindow):
 
         self.activity_timeline.addItem("New search session started. Enter your query.")
         self.status_bar.showMessage("Ready for new search.", 5000)
-        if DEBUG: print(f"Ready for new search.", 5000)
 
     @Slot()
     def handle_copy_ai_message(self):
@@ -421,7 +419,6 @@ class MainWindow(QMainWindow):
         if selected_text:
             QApplication.clipboard().setText(selected_text)
             self.status_bar.showMessage("Selected text copied to clipboard.", 3000)
-            if DEBUG: print(f"Selected text copied to clipboard.", 3000)
         else:
             # Attempt to find the last AI message block.
             # This is a heuristic and might not be perfectly robust.
@@ -437,14 +434,11 @@ class MainWindow(QMainWindow):
                 plain_text = temp_browser.toPlainText()
                 QApplication.clipboard().setText(plain_text.strip())
                 self.status_bar.showMessage("Last AI message copied to clipboard.", 3000)
-                if DEBUG: print(f"Last AI message copied to clipboard.", 3000)
             elif self.chat_display_area.toPlainText().strip():
                  QApplication.clipboard().setText(self.chat_display_area.toPlainText())
                  self.status_bar.showMessage("Chat content copied (could not identify specific AI message).", 3000)
-                 if DEBUG: print(f"Chat content copied (could not identify specific AI message).", 3000)
             else:
                  self.status_bar.showMessage("Chat display is empty.", 3000)
-                 if DEBUG: print(f"Chat display is empty.", 3000)
 
     def closeEvent(self, event):
         if self.backend_thread and self.backend_thread.isRunning():
