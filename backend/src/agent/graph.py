@@ -48,12 +48,12 @@ genai_client = Client(api_key=os.getenv("GEMINI_API_KEY"))
 # Nodes
 def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerationState:
     configurable = Configuration.from_runnable_config(config)
-
+    
     # Initialize LLM (ensure this is how it's done, or pass llm if initialized outside)
     # This was previously outside the if/else, makes sense to have one instance
     llm = ChatGoogleGenerativeAI(
         model=configurable.query_generator_model,
-        temperature=1.0,
+        temperature=1.0, 
         max_retries=2,
         api_key=os.getenv("GEMINI_API_KEY"),
     )
@@ -65,7 +65,7 @@ def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerati
 
     # 1. Deterministic path for specific test file (remains)
     # This regex specifically looks for 'backend/test_data/protagonist_info.txt'
-    test_file_pattern = r"(?:['"])?(backend/test_data/protagonist_info\.txt)(?:['"])?"
+    test_file_pattern = r"(?:['\"])?(backend/test_data/protagonist_info\.txt)(?:['\"])?"
     specific_test_file_match = re.search(test_file_pattern, research_topic_str)
     if specific_test_file_match:
         extracted_path = specific_test_file_match.group(1) # Get the captured path
@@ -83,7 +83,7 @@ def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerati
                 return {"query_list": []}
 
             print(f"[generate_query] Files in '{target_folder}': {available_files}")
-
+            
             file_list_str = "\n - ".join(available_files)
             current_date = get_current_date()
 
@@ -99,10 +99,10 @@ def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerati
                 "For example, if the target folder is '/path/to/folder' and you choose 'file1.txt' from the list, "
                 "the query string in the Query object must be '/path/to/folder/file1.txt'."
             )
-
+            
             print(f"[generate_query] Prompting LLM to select files. Prompt (first 300 chars): {formatted_prompt[:300]}...")
             llm_output = structured_llm.invoke(formatted_prompt) # llm_output is SearchQueryList
-
+            
             final_queries = []
             if llm_output and llm_output.query: # llm_output.query is List[Query]
                 for query_obj in llm_output.query:
@@ -119,7 +119,7 @@ def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerati
                             print(f"[generate_query] LLM selected a file not in the original list, discarding: {query_path_str}")
                     else:
                          print(f"[generate_query] LLM selected an invalid (not absolute or wrong base folder) path, discarding: {query_path_str}")
-
+            
             if not final_queries:
                 print("[generate_query] LLM did not select any valid files from the provided list.")
             return {"query_list": final_queries}
@@ -132,14 +132,14 @@ def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerati
     # This includes the simple path validation from previous step.
     print("[generate_query] No target folder specified or path is invalid. Using general LLM query generation with path filtering.")
     current_date = get_current_date()
-
+    
     # Check if research_topic_str itself looks like a specific file path to be directly used (general_file_path_match_in_fallback)
     # This regex is for more generic paths if user types one directly without specifying a folder.
-    general_path_pattern = r"['"]?((?:[a-zA-Z]:)?[/\a-zA-Z0-9._-]+(?:/[a-zA-Z0-9._-]+)*\.[a-zA-Z0-9]+)['"]?"
+    general_path_pattern = r"(?:['\"])?((?:[a-zA-Z]:)?[\/]?[\w\s./\-]+?\.\w+)(?:['\"])?"
     general_file_path_match = re.search(general_path_pattern, research_topic_str)
 
     if general_file_path_match:
-        extracted_general_path = general_file_path_match.group(1).strip("'"")
+        extracted_general_path = general_file_path_match.group(1).strip("'\"")
         # If the query IS a path, maybe the LLM should just confirm it.
         # Or, if the user is asking a question ABOUT this path.
         # For now, the prompt asks LLM to confirm it.
@@ -153,7 +153,7 @@ def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerati
             f"Output only one search query object containing the confirmed file path if applicable."
         )
         # Force 1 query for this case
-        state["initial_search_query_count"] = 1
+        state["initial_search_query_count"] = 1 
     else:
         print("[generate_query] No general file path detected in query. Using standard query writer prompt for file discovery.")
         formatted_prompt = query_writer_instructions.format( # Ensure query_writer_instructions is loaded
@@ -163,7 +163,7 @@ def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerati
         )
 
     llm_fallback_result = structured_llm.invoke(formatted_prompt) # llm_fallback_result is SearchQueryList
-
+    
     validated_queries_fallback = []
     if llm_fallback_result and llm_fallback_result.query: # llm_fallback_result.query is List[Query]
         for q_obj in llm_fallback_result.query: # q_obj is Query
@@ -174,10 +174,10 @@ def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerati
                 validated_queries_fallback.append(q_obj) # Add Query object
             else:
                 print(f"[generate_query] Fallback LLM discarded non-path-like output: '{query_str}'")
-
+    
     if not validated_queries_fallback:
         print("[generate_query] Fallback LLM did not produce any valid-looking file paths.")
-
+    
     return {"query_list": validated_queries_fallback}
 
 
@@ -410,7 +410,7 @@ if __name__ == "__main__":
         if files:
             first_file_path = os.path.join(directory_path, files[0])
             print(f"\nReading content of the first file: '{first_file_path}'")
-
+            
             # The local read_project_file is removed.
             # If this test CLI needs to read a file, it should also use the util version.
             # However, read_project_file from utils expects node_id, which might not make sense here.
