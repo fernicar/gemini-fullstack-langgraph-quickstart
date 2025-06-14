@@ -2,10 +2,22 @@
 import pathlib
 from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
+from .graph import graph as agent_runnable # Import your LangGraph agent
+from langserve import add_routes # Import add_routes
 
 # Define the FastAPI app
 app = FastAPI()
 
+# Add LangServe routes for the agent
+add_routes(
+    app,
+    agent_runnable,
+    path="/agent",
+    # Enabling feedback and public trace link endpoints can be useful for development
+    enable_feedback_endpoint=True,
+    enable_public_trace_link_endpoint=True,
+    # You might need to add other config options based on your specific graph and needs
+)
 
 def create_frontend_router(build_dir="../frontend/dist"):
     """Creates a router to serve the React frontend.
