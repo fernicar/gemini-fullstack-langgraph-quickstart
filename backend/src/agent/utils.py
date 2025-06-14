@@ -1,7 +1,7 @@
-from typing import Any, Dict, List # List is already here
+from typing import Any, Dict, List, Optional # Added Optional
 from langchain_core.messages import AnyMessage, AIMessage, HumanMessage
 from pathlib import Path
-import os # os is already here
+import os
 
 
 def get_research_topic(messages: List[AnyMessage]) -> str:
@@ -211,6 +211,103 @@ def read_project_file(file_path_query: str, node_id: int) -> dict:
 # list_files_in_directory is not requested to be moved here unless needed by agent logic.
 # The graph.py's CLI test part was modified to import it from utils if needed, or use direct os.listdir.
 # For now, not adding list_files_in_directory to utils.py as it's not part of the core agent flow modifications.
+
+def generate_directory_tree(
+    start_path: str,
+    max_depth: int = 2,
+    max_items_per_folder: int = 10,
+    indent_char: str = "    ", # Usually 4 spaces
+    ignore_folders: Optional[List[str]] = None,
+    ignore_extensions: Optional[List[str]] = None
+) -> str:
+    """
+    Generates a string representation of a directory tree.
+
+    Args:
+        start_path: The root directory from which to generate the tree.
+        max_depth: Maximum depth of subdirectories to traverse.
+        max_items_per_folder: Maximum number of files/subdirs to list per folder.
+        indent_char: String to use for indentation.
+        ignore_folders: List of folder names to ignore (e.g., "__pycache__", ".git").
+        ignore_extensions: List of file extensions to ignore (e.g., ".pyc").
+    """
+    if ignore_folders is None:
+        ignore_folders = ["__pycache__", ".git", ".venv", ".vscode", "node_modules", "build", "dist", ".pytest_cache", "htmlcov"]
+    if ignore_extensions is None:
+        ignore_extensions = [".pyc", ".pyo", ".swp", ".swo", ".DS_Store", ".coverage"]
+
+    tree_lines = []
+
+    if not os.path.isdir(start_path):
+        return f"Error: Provided path '{start_path}' is not a valid directory."
+
+    normalized_start_path = os.path.normpath(start_path)
+    tree_lines.append(f"{os.path.basename(normalized_start_path)}/")
+
+    def _build_tree(current_path, current_depth, current_indent):
+        if current_depth > max_depth:
+            return
+
+        try:
+            entries = sorted(os.listdir(current_path))
+        except OSError:
+            tree_lines.append(f"{current_indent}{indent_char}|-- [Error listing directory]")
+            return
+
+        listed_items = 0
+        # Separate dirs and files to list dirs first, then files, within max_items_per_folder constraint
+        dirs_to_process = []
+        files_to_process = []
+
+        for entry in entries:
+            if entry.startswith('.') or entry in ignore_folders:
+                continue
+
+            entry_path = os.path.join(current_path, entry)
+            if os.path.isdir(entry_path):
+                dirs_to_process.append(entry)
+            else: # It's a file
+                if any(entry.endswith(ext) for ext in ignore_extensions):
+                    continue
+                files_to_process.append(entry)
+
+        # Process directories
+        for entry in dirs_to_process:
+            if listed_items >= max_items_per_folder:
+                tree_lines.append(f"{current_indent}{indent_char}|-- ... (more items)")
+                break
+            tree_lines.append(f"{current_indent}{indent_char}|-- {entry}/")
+            listed_items += 1
+            _build_tree(os.path.join(current_path, entry), current_depth + 1, current_indent + indent_char)
+            if listed_items >= max_items_per_folder and (len(dirs_to_process) > listed_items or files_to_process): # Check if break needed after recursion
+                 tree_lines.append(f"{current_indent}{indent_char}|-- ... (more items)")
+                 break
+
+        # Process files only if we haven't hit the max_items limit with directories
+        if listed_items < max_items_per_folder:
+            for entry in files_to_process:
+                if listed_items >= max_items_per_folder:
+                    tree_lines.append(f"{current_indent}{indent_char}|-- ... (more items)")
+                    break
+                tree_lines.append(f"{current_indent}{indent_char}|-- {entry}")
+                listed_items += 1
+
+        if listed_items == 0 and current_depth <= max_depth:
+            is_truly_empty = True
+            try:
+                # Check if directory is truly empty or all items were ignored
+                for entry in os.listdir(current_path):
+                    if not entry.startswith('.'): # Consider non-hidden items
+                        is_truly_empty = False
+                        break
+            except OSError: # If it becomes unlistable, treat as effectively empty for display
+                pass
+            if is_truly_empty:
+                 tree_lines.append(f"{current_indent}{indent_char}|-- [empty]")
+
+    _build_tree(normalized_start_path, 1, "")
+
+    return "\n".join(tree_lines)
 
 def list_files_in_directory(folder_path: str) -> List[str]:
     """

@@ -357,19 +357,19 @@ class MainWindow(QMainWindow):
             self.current_ai_message = ""
 
             self.status_bar.showMessage("Processing query...")
-            selected_model_display_name = self.model_combo.currentText() # Get for logging
-            self.activity_timeline.addItem(f"Query submitted (Effort: {self.effort_combo.currentText()}, Model: {selected_model_display_name}, Folder: {target_folder if target_folder else 'N/A'})")
+            selected_model_display_name = self.model_combo.currentText() # Changed variable name
+            self.activity_timeline.addItem(f"Query submitted (Effort: {self.effort_combo.currentText()}, Model: {selected_model_display_name}, Folder: {target_folder if target_folder else 'N/A'})") # Use new variable name
 
             selected_effort_params = self._get_effort_params()
-            # selected_model is already captured by selected_model_display_name for BackendThread
+            # selected_model_display_name is now the variable holding the model name
             thread_id = str(uuid.uuid4())
 
             self.backend_thread = BackendThread(
                 query_text,
                 selected_effort_params,
-                selected_model,
+                selected_model_display_name,  # Use the new variable name here
                 thread_id,
-                target_folder # Pass the new folder path
+                target_folder
             )
             self.backend_thread.new_message_signal.connect(self._update_chat_display)
             self.backend_thread.new_activity_signal.connect(self._update_activity_log)

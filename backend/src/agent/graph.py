@@ -2,8 +2,9 @@ import os
 import argparse
 import sys
 import re
+from pathlib import Path # Ensure Path is imported for project_root_for_fallback
 
-from .tools_and_schemas import SearchQueryList, Reflection, Query # Ensure Query is imported
+from .tools_and_schemas import SearchQueryList, Reflection, Query
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage
 from langgraph.types import Send
@@ -33,7 +34,8 @@ from .utils import (
     insert_citation_markers,
     resolve_urls,
     read_project_file,
-    list_files_in_directory, # Added import for list_files_in_directory
+    list_files_in_directory,
+    generate_directory_tree # Added generate_directory_tree
 )
 
 load_dotenv()
@@ -118,62 +120,56 @@ def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerati
             print(f"[generate_query] Error listing files or processing folder '{target_folder}': {e}")
             return {"query_list": []}
 
-    # 3. Fallback: Try to extract quoted path from query, then use LLM to confirm/process
-    print("[generate_query] No target folder. Trying to extract quoted path or using general LLM query generation.")
+    # 3. Fallback: Use LLM with a directory tree if no target_folder is specified
+    #    or if the target_folder logic didn't return results (e.g., folder was empty).
+    #    This path is taken if the function hasn't returned yet.
 
-    potential_path_from_quotes = None
-    # Try to find single-quoted string
-    start_sq = research_topic_str.find("'")
-    if start_sq != -1:
-        end_sq = research_topic_str.find("'", start_sq + 1)
-        if end_sq != -1:
-            potential_path_from_quotes = research_topic_str[start_sq + 1 : end_sq]
+    print("[generate_query] Fallback: No target folder specified or processed. Generating directory tree for LLM context.")
 
-    if not potential_path_from_quotes:
-        start_dq = research_topic_str.find('"')
-        if start_dq != -1:
-            end_dq = research_topic_str.find('"', start_dq + 1)
-            if end_dq != -1:
-                potential_path_from_quotes = research_topic_str[start_dq + 1 : end_dq]
+    fallback_scan_path_str = "backend/test_data"
+    project_root_for_fallback = str(Path(__file__).resolve().parents[3])
+    absolute_fallback_scan_path = os.path.join(project_root_for_fallback, fallback_scan_path_str)
+
+    print(f"[generate_query] Fallback scan path for tree: '{absolute_fallback_scan_path}'")
+
+    directory_tree_str = generate_directory_tree(absolute_fallback_scan_path, max_depth=2, max_items_per_folder=5)
+    print(f"[generate_query] Generated directory tree (first 300 chars):\n{directory_tree_str[:300]}...")
 
     current_date = get_current_date()
-    if potential_path_from_quotes:
-        extracted_general_path = potential_path_from_quotes
-        print(f"[generate_query] Potential path extracted via quote search: '{extracted_general_path}'. Refining prompt for LLM.")
-        formatted_prompt = (
-            f"The user's query mentions this potential file path: '{extracted_general_path}'. "
-            f"Your task is to determine if this is a valid file path relevant to the query. "
-            f"If it is, output this exact file path as the search query. "
-            f"User question: {research_topic_str}. "
-            f"Output only one search query object containing the confirmed file path if applicable. "
-            f"If it does not seem like a valid or relevant path for the query, or if it's not a path at all, return an empty list of queries."
-        )
-        state["initial_search_query_count"] = 1
-    else:
-        print("[generate_query] No quoted path found. Using general query writer prompt for file discovery.")
-        # This prompt needs to be very good at instructing the LLM to return path-like strings.
-        formatted_prompt = query_writer_instructions.format(
-            current_date=current_date,
-            research_topic=research_topic_str,
-            number_queries=initial_query_count,
-        ) + ( " IMPORTANT: Each 'query' you generate in the list MUST be a relative or absolute file path string. "
-              "Do not generate questions or descriptive text as queries." )
+    # New prompt using the directory tree
+    formatted_prompt = (
+        f"Current date: {current_date}\n"
+        f"User's research question: {research_topic_str}\n"
+        f"I have the following directory structure available (from '{fallback_scan_path_str}'):\n{directory_tree_str}\n\n"
+        f"Based on the user's question, and considering the available files and folders in the tree, "
+        f"which file(s) should I read to find the answer? "
+        f"List up to {initial_query_count} relevant file path(s). "
+        "Your output should be a list of query objects. For each chosen file, the 'query' field in the object "
+        "must be a project-relative file path (e.g., 'backend/src/agent/utils.py' or 'backend/test_data/some_file.txt') "
+        "based on the provided tree and the user's query. "
+        "If no files in the tree seem relevant, return an empty list of queries."
+    )
 
-
-    llm_fallback_result = structured_llm.invoke(formatted_prompt)
+    print(f"[generate_query] Fallback: Prompting LLM with directory tree. Prompt (first 300 chars): {formatted_prompt[:300]}...")
+    llm_fallback_result = structured_llm.invoke(formatted_prompt) # structured_llm is already defined
 
     validated_queries_fallback = []
-    if llm_fallback_result and llm_fallback_result.query:
-        for q_obj in llm_fallback_result.query:
-            query_str = q_obj.query
-            if isinstance(query_str, str) and ('.' in query_str or '/' in query_str or '\\' in query_str) and len(query_str) < 250 and not query_str.endswith("?") and " " not in query_str.split('/')[-1].split('\\')[-1]: # Avoid spaces in filename part
-                print(f"[generate_query] Fallback LLM generated potential path: '{query_str}'")
+    if llm_fallback_result and llm_fallback_result.query: # llm_fallback_result.query is List[Query]
+        for q_obj in llm_fallback_result.query: # q_obj is Query
+            query_str = q_obj.query # This is the string path (should be project-relative)
+            # Basic validation for path-like strings.
+            if isinstance(query_str, str) and ('.' in query_str or '/' in query_str or '\\' in query_str) and \
+               len(query_str) < 250 and not query_str.endswith("?") and \
+               " " not in query_str.split('/')[-1].split('\\')[-1] and \
+               not query_str.startswith("Error:"): # Ensure it's not an error message from tree gen
+
+                print(f"[generate_query] Fallback LLM (tree-based) generated potential path: '{query_str}'")
                 validated_queries_fallback.append(q_obj)
             else:
-                print(f"[generate_query] Fallback LLM discarded non-path-like output: '{query_str}'")
+                print(f"[generate_query] Fallback LLM (tree-based) discarded non-path-like or invalid output: '{query_str}'")
 
     if not validated_queries_fallback:
-        print("[generate_query] Fallback LLM did not produce any valid-looking file paths.")
+        print("[generate_query] Fallback LLM (tree-based) did not produce any valid-looking file paths from the tree.")
 
     return {"query_list": validated_queries_fallback}
 
