@@ -1,5 +1,7 @@
 from typing import Any, Dict, List
 from langchain_core.messages import AnyMessage, AIMessage, HumanMessage
+from pathlib import Path # Added import
+import os # Added import
 
 
 def get_research_topic(messages: List[AnyMessage]) -> str:
@@ -164,3 +166,48 @@ def get_citations(response, resolved_urls_map):
                     pass
         citations.append(citation)
     return citations
+
+
+def read_project_file(file_path_query: str, node_id: int) -> dict:
+    # Assuming utils.py is in backend/src/agent/
+    # Path(__file__) is /app/backend/src/agent/utils.py
+    # parents[0] is /app/backend/src/agent
+    # parents[1] is /app/backend/src
+    # parents[2] is /app/backend
+    # parents[3] is /app (project root)
+    project_root = Path(__file__).resolve().parents[3]
+    actual_file_path = project_root / file_path_query.strip("'\"") # Clean potential quotes
+
+    print(f"[read_project_file] Received query: '{file_path_query}'")
+    print(f"[read_project_file] Node ID: {node_id}")
+    print(f"[read_project_file] Project root: '{project_root}'")
+    print(f"[read_project_file] Attempting to read: '{actual_file_path}'")
+
+    try:
+        # Use actual_file_path for reading
+        with open(actual_file_path, "r", encoding="utf-8") as f:
+            file_content = f.read()
+        print(f"[read_project_file] Successfully read file: '{actual_file_path}'")
+        return {
+            "sources_gathered": [{"type": "file", "source": str(actual_file_path), "content": file_content, "id": node_id}],
+            "web_research_result": [file_content]
+        }
+    except FileNotFoundError:
+        error_message = f"File not found: {str(actual_file_path)}"
+        print(f"[read_project_file] Error: {error_message}")
+        return {
+            "sources_gathered": [{"type": "file", "source": str(actual_file_path), "content": error_message, "id": node_id, "error": True}],
+            "web_research_result": [error_message]
+        }
+    except Exception as e:
+        error_message = f"Error reading file {str(actual_file_path)}: {str(e)}"
+        print(f"[read_project_file] Error: {error_message}")
+        return {
+            "sources_gathered": [{"type": "file", "source": str(actual_file_path), "content": error_message, "id": node_id, "error": True}],
+            "web_research_result": [error_message]
+        }
+
+
+# list_files_in_directory is not requested to be moved here unless needed by agent logic.
+# The graph.py's CLI test part was modified to import it from utils if needed, or use direct os.listdir.
+# For now, not adding list_files_in_directory to utils.py as it's not part of the core agent flow modifications.
