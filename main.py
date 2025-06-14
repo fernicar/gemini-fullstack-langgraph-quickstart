@@ -2,6 +2,7 @@ import sys
 import httpx
 import json
 import uuid
+import os # Added for os.path.join, os.path.abspath, os.path.isdir
 from PySide6.QtCore import Qt, Slot, QTimer, QThread, Signal
 from pathlib import Path # For Path.home() in handle_browse_folder
 from PySide6.QtWidgets import (
@@ -197,14 +198,13 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.backend_thread = None
-        self.current_ai_message = "" # To accumulate partial AI messages
+        self.current_ai_message = ""
+        self.is_processing = False # Initialize the flag
         self.setWindowTitle("TINS Agent PySide6 GUI")
         self.setGeometry(100, 100, 1200, 800)
 
-        # self.is_processing = False # Replaced by checking self.backend_thread
-
         # --- Menu Bar ---
-        self.menu_bar = QMenuBar() # Corrected: was self.menuBar()
+        self.menu_bar = QMenuBar()
         self.file_menu = self.menu_bar.addMenu("&File")
         self.new_search_action = self.file_menu.addAction("&New Search") # Corrected: was self.file_menu.addAction()
         self.new_search_action.triggered.connect(self.handle_new_search)
@@ -248,6 +248,16 @@ class MainWindow(QMainWindow):
 
         self.folder_path_input = QLineEdit()
         self.folder_path_input.setPlaceholderText("Select a folder containing files for research...")
+
+        # --- Set default folder path ---
+        default_folder_relative = os.path.join("backend", "test_data")
+        default_folder_absolute = os.path.abspath(default_folder_relative)
+        if os.path.isdir(default_folder_absolute):
+            self.folder_path_input.setText(default_folder_absolute)
+        else:
+            print(f"[WARN] Default research folder not found: {default_folder_absolute}")
+        # -----------------------------
+
         self.folder_path_input.setMinimumWidth(250)
         self.controls_layout.addWidget(self.folder_path_input)
 
@@ -310,57 +320,48 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def handle_search_stop(self):
-        if self.backend_thread and self.backend_thread.isRunning():
+        if self.is_processing: # Use the flag to determine state
             # Stop Search
-            self.backend_thread.stop() # Signal the thread to stop
-            # self.backend_thread.quit() # Request event loop to exit
-            # self.backend_thread.wait(5000) # Wait for thread to finish, with timeout
-            # If still running after wait, terminate (use with caution)
-            # if self.backend_thread.isRunning():
-            #     self.backend_thread.terminate()
-            #     self.activity_timeline.addItem("Backend thread forcefully terminated.")
-
-            self._reset_ui_after_processing() # Resets buttons and enables inputs
-            self.status_bar.showMessage("Processing stopped by user.", 5000)
-            self.activity_timeline.addItem("Processing stopped by user.")
-            # self.backend_thread is set to None in _on_thread_actually_finished or _reset_ui_after_processing
-            if self.backend_thread : # ensure it's not already None
-                self.backend_thread = None
+            if self.backend_thread and self.backend_thread.isRunning():
+                self.backend_thread.stop()
+                self.status_bar.showMessage("Stop request sent to backend.", 3000)
+                self.activity_timeline.addItem("Stop request sent to backend.")
+                # UI reset and self.is_processing = False will be handled by signals
+            else:
+                # If is_processing is true but thread is not running (e.g. finished/errored before stop click)
+                self._reset_ui_after_processing() # This will set is_processing to False
+                self.status_bar.showMessage("Processing was already stopped or had finished.", 3000)
         else:
             # Start Search
             query_text = self.query_input.toPlainText().strip()
-            target_folder = self.folder_path_input.text().strip() # Get the folder path
+            target_folder = self.folder_path_input.text().strip()
 
             if not query_text:
                 self.status_bar.showMessage("Error: Query cannot be empty.", 5000)
                 return
 
-            # Optional: Validate target_folder or decide if it's mandatory
-            if not target_folder:
-                # self.status_bar.showMessage("Warning: No research folder selected. Agent will use its default behavior.", 5000)
-                pass # Pass it as empty or None to backend thread
-
-
-            selected_effort_params = self._get_effort_params()
-            selected_model = self.model_combo.currentText()
-
-            self._update_chat_display("human", query_text)
-            self.query_input.clear()
-            self.current_ai_message = ""
-
+            self.is_processing = True # Set flag immediately
             self.search_stop_button.setText("Stop")
+
+            # Disable UI elements
             self.query_input.setEnabled(False)
-            self.folder_path_input.setEnabled(False) # Disable folder input during search
-            self.browse_folder_button.setEnabled(False) # Disable browse button
+            self.folder_path_input.setEnabled(False)
+            self.browse_folder_button.setEnabled(False)
             self.effort_combo.setEnabled(False)
             self.model_combo.setEnabled(False)
             self.new_search_button.setEnabled(False)
             self.new_search_action.setEnabled(False)
+
+            self._update_chat_display("human", query_text) # Display human message
+            self.query_input.clear() # Clear input after grabbing text
+            self.current_ai_message = ""
+
             self.status_bar.showMessage("Processing query...")
+            selected_model_display_name = self.model_combo.currentText() # Get for logging
+            self.activity_timeline.addItem(f"Query submitted (Effort: {self.effort_combo.currentText()}, Model: {selected_model_display_name}, Folder: {target_folder if target_folder else 'N/A'})")
 
-            self._update_chat_display("human", query_text) # Moved after disabling inputs and setting message
-            self.activity_timeline.addItem(f"Query submitted (Effort: {self.effort_combo.currentText()}, Model: {selected_model}, Folder: {target_folder if target_folder else 'N/A'})")
-
+            selected_effort_params = self._get_effort_params()
+            # selected_model is already captured by selected_model_display_name for BackendThread
             thread_id = str(uuid.uuid4())
 
             self.backend_thread = BackendThread(
@@ -444,16 +445,17 @@ class MainWindow(QMainWindow):
         self.backend_thread = None # Ensure it's cleared
 
     def _reset_ui_after_processing(self):
+        self.is_processing = False # Reset the flag
         self.search_stop_button.setText("Search")
         self.query_input.setEnabled(True)
-        self.folder_path_input.setEnabled(True) # Re-enable folder input
-        self.browse_folder_button.setEnabled(True) # Re-enable browse button
+        self.folder_path_input.setEnabled(True)
+        self.browse_folder_button.setEnabled(True)
         self.effort_combo.setEnabled(True)
         self.model_combo.setEnabled(True)
         self.new_search_button.setEnabled(True)
         self.new_search_action.setEnabled(True)
-        if self.backend_thread is None : # only set to None if not already handled by stop
-             self.backend_thread = None
+        # self.backend_thread is set to None by _on_thread_actually_finished
+        # No need to check self.backend_thread here as this method is about UI state reset
 
 
     @Slot()
