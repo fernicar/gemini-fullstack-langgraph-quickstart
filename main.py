@@ -21,6 +21,16 @@ from PySide6.QtWidgets import (
     QToolBar
 )
 
+# --- Model API Name Mapping ---
+# Ensure keys match the display names in model_combo in MainWindow
+MODEL_API_MAP = {
+    "Gemini 1.5 Flash": "gemini-1.5-flash-latest", # Google's API often uses this format
+    "Gemini 1.5 Pro": "gemini-1.5-pro-latest",
+    # For other models, we pass their names as-is.
+    # The backend will error if it doesn't support them, but it won't be a Google "model name format" error.
+    "Claude 3 Sonnet": "claude-3-sonnet-20240229",
+    "GPT-4o": "gpt-4o",
+}
 
 # --- Backend Communication Thread ---
 class BackendThread(QThread):
@@ -39,22 +49,18 @@ class BackendThread(QThread):
 
     def run(self):
         try:
-            # Backend URL and endpoint (adjust if different)
-            # Common LangGraph Python SDK endpoints are /invoke or /stream for a runnable
             backend_url = "http://localhost:8000/agent/invoke"
-            # Or potentially /stream if the backend is set up for that specifically
-            # For LangServe, the input is often just the input to the graph, and config is separate
 
-            # Construct payload based on TINS Edition/README.md and typical LangGraph input
-            # The exact structure for input messages might vary (e.g. just `{"input": "user query"}` or `{"input": {"question": "user query"}}`)
-            # For a chat-like interaction, it's often `{"messages": [{"role": "user", "content": "query"}]}`
-            # We'll use a structure that includes messages and config for thread_id
+            selected_model_display_name = self.model_name
+            # Use a default if not found (i.e., pass the original name)
+            api_model_name = MODEL_API_MAP.get(selected_model_display_name, selected_model_display_name)
+
             payload = {
                 "input": {
                     "messages": [{"type": "human", "content": self.query, "id": str(uuid.uuid4())[:8]}],
                     "initial_search_query_count": self.effort_params["initial_search_query_count"],
                     "max_research_loops": self.effort_params["max_research_loops"],
-                    "reasoning_model": self.model_name, # Ensure this matches backend expectation
+                    "reasoning_model": api_model_name, # Use the mapped API name
                     # ---- Add missing fields with default values ----
                     "search_query": [],
                     "web_research_result": [],
