@@ -3,9 +3,12 @@ import httpx
 import json
 import uuid
 from PySide6.QtCore import Qt, Slot, QTimer, QThread, Signal
+from pathlib import Path # For Path.home() in handle_browse_folder
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
+    QLineEdit,     # Added QLineEdit
+    QFileDialog,   # Added QFileDialog
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
@@ -43,12 +46,13 @@ class BackendThread(QThread):
     processing_error_signal = Signal(str)  # error_message
     processing_finished_signal = Signal()  # no args
 
-    def __init__(self, query: str, effort_params: dict, model_name: str, thread_id: str):
+    def __init__(self, query: str, effort_params: dict, model_name: str, thread_id: str, target_folder: str = None): # Added target_folder
         super().__init__()
         self.query = query
-        self.effort_params = effort_params # e.g., {"initial_search_query_count": 1, "max_research_loops": 1}
+        self.effort_params = effort_params
         self.model_name = model_name
         self.thread_id = thread_id
+        self.target_folder = target_folder # Store target_folder
         self._is_running = True
 
     def run(self):
@@ -64,13 +68,12 @@ class BackendThread(QThread):
                     "messages": [{"type": "human", "content": self.query, "id": str(uuid.uuid4())[:8]}],
                     "initial_search_query_count": self.effort_params["initial_search_query_count"],
                     "max_research_loops": self.effort_params["max_research_loops"],
-                    "reasoning_model": api_model_name, # Use the mapped API name
-                    # ---- Add missing fields with default values ----
+                    "reasoning_model": api_model_name,
                     "search_query": [],
                     "web_research_result": [],
                     "sources_gathered": [],
                     "research_loop_count": 0,
-                    # ---------------------------------------------
+                    "target_folder": self.target_folder if self.target_folder else "", # Add target_folder to payload
                 },
                 "config": {
                     "configurable": {"thread_id": self.thread_id}
@@ -238,6 +241,22 @@ class MainWindow(QMainWindow):
         self.bottom_layout.addWidget(self.query_input)
 
         self.controls_layout = QHBoxLayout()
+
+        # Folder Path Input
+        self.folder_path_label = QLabel("Research Folder:")
+        self.controls_layout.addWidget(self.folder_path_label)
+
+        self.folder_path_input = QLineEdit()
+        self.folder_path_input.setPlaceholderText("Select a folder containing files for research...")
+        self.folder_path_input.setMinimumWidth(250)
+        self.controls_layout.addWidget(self.folder_path_input)
+
+        self.browse_folder_button = QPushButton("Browse...")
+        self.browse_folder_button.clicked.connect(self.handle_browse_folder)
+        self.controls_layout.addWidget(self.browse_folder_button)
+
+        self.controls_layout.addSpacing(20) # Add a little space before "Effort"
+
         self.effort_label = QLabel("Effort:")
         self.controls_layout.addWidget(self.effort_label)
         self.effort_combo = QComboBox()
@@ -301,44 +320,56 @@ class MainWindow(QMainWindow):
             #     self.backend_thread.terminate()
             #     self.activity_timeline.addItem("Backend thread forcefully terminated.")
 
-            self.search_stop_button.setText("Search")
-            self.query_input.setEnabled(True)
-            self.effort_combo.setEnabled(True)
-            self.model_combo.setEnabled(True)
-            self.new_search_button.setEnabled(True)
-            self.new_search_action.setEnabled(True)
+            self._reset_ui_after_processing() # Resets buttons and enables inputs
             self.status_bar.showMessage("Processing stopped by user.", 5000)
             self.activity_timeline.addItem("Processing stopped by user.")
-            self.backend_thread = None # Allow it to be garbage collected after it finishes
+            # self.backend_thread is set to None in _on_thread_actually_finished or _reset_ui_after_processing
+            if self.backend_thread : # ensure it's not already None
+                self.backend_thread = None
         else:
             # Start Search
             query_text = self.query_input.toPlainText().strip()
+            target_folder = self.folder_path_input.text().strip() # Get the folder path
+
             if not query_text:
                 self.status_bar.showMessage("Error: Query cannot be empty.", 5000)
                 return
 
+            # Optional: Validate target_folder or decide if it's mandatory
+            if not target_folder:
+                # self.status_bar.showMessage("Warning: No research folder selected. Agent will use its default behavior.", 5000)
+                pass # Pass it as empty or None to backend thread
+
+
             selected_effort_params = self._get_effort_params()
             selected_model = self.model_combo.currentText()
 
-            # Append user message to chat display immediately
             self._update_chat_display("human", query_text)
             self.query_input.clear()
-            self.current_ai_message = "" # Reset any accumulated AI message
+            self.current_ai_message = ""
 
             self.search_stop_button.setText("Stop")
             self.query_input.setEnabled(False)
+            self.folder_path_input.setEnabled(False) # Disable folder input during search
+            self.browse_folder_button.setEnabled(False) # Disable browse button
             self.effort_combo.setEnabled(False)
             self.model_combo.setEnabled(False)
             self.new_search_button.setEnabled(False)
             self.new_search_action.setEnabled(False)
             self.status_bar.showMessage("Processing query...")
 
-            self.activity_timeline.addItem(f"Query submitted (Effort: {self.effort_combo.currentText()}, Model: {selected_model})")
+            self._update_chat_display("human", query_text) # Moved after disabling inputs and setting message
+            self.activity_timeline.addItem(f"Query submitted (Effort: {self.effort_combo.currentText()}, Model: {selected_model}, Folder: {target_folder if target_folder else 'N/A'})")
 
-            # Generate a new thread_id for this search session
             thread_id = str(uuid.uuid4())
 
-            self.backend_thread = BackendThread(query_text, selected_effort_params, selected_model, thread_id)
+            self.backend_thread = BackendThread(
+                query_text,
+                selected_effort_params,
+                selected_model,
+                thread_id,
+                target_folder # Pass the new folder path
+            )
             self.backend_thread.new_message_signal.connect(self._update_chat_display)
             self.backend_thread.new_activity_signal.connect(self._update_activity_log)
             self.backend_thread.processing_error_signal.connect(self._handle_processing_error)
@@ -415,13 +446,33 @@ class MainWindow(QMainWindow):
     def _reset_ui_after_processing(self):
         self.search_stop_button.setText("Search")
         self.query_input.setEnabled(True)
+        self.folder_path_input.setEnabled(True) # Re-enable folder input
+        self.browse_folder_button.setEnabled(True) # Re-enable browse button
         self.effort_combo.setEnabled(True)
         self.model_combo.setEnabled(True)
         self.new_search_button.setEnabled(True)
         self.new_search_action.setEnabled(True)
-        # if self.backend_thread:
-        #     self.backend_thread = None # Clear the thread reference
+        if self.backend_thread is None : # only set to None if not already handled by stop
+             self.backend_thread = None
 
+
+    @Slot()
+    def handle_browse_folder(self):
+        # Get the current path from the line edit, if any, to start the dialog there
+        current_path = self.folder_path_input.text()
+        if not current_path:
+            # Default to home directory or current working directory if field is empty
+            current_path = str(Path.home()) # Or os.getcwd()
+
+        folder_path = QFileDialog.getExistingDirectory(
+            self,
+            "Select Research Folder",
+            current_path,
+            QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks
+        )
+        if folder_path: # If a folder was selected (dialog not cancelled)
+            self.folder_path_input.setText(folder_path)
+            self.status_bar.showMessage(f"Folder selected: {folder_path}", 3000)
 
     @Slot()
     def handle_new_search(self):

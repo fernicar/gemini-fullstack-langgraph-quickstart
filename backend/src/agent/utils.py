@@ -1,7 +1,7 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List # List is already here
 from langchain_core.messages import AnyMessage, AIMessage, HumanMessage
-from pathlib import Path # Added import
-import os # Added import
+from pathlib import Path
+import os # os is already here
 
 
 def get_research_topic(messages: List[AnyMessage]) -> str:
@@ -211,3 +211,28 @@ def read_project_file(file_path_query: str, node_id: int) -> dict:
 # list_files_in_directory is not requested to be moved here unless needed by agent logic.
 # The graph.py's CLI test part was modified to import it from utils if needed, or use direct os.listdir.
 # For now, not adding list_files_in_directory to utils.py as it's not part of the core agent flow modifications.
+
+def list_files_in_directory(folder_path: str) -> List[str]:
+    """
+    Lists all filenames (not full paths) in a given directory.
+    Excludes hidden files/folders (those starting with '.').
+    Returns an empty list if the path is not a directory or is inaccessible.
+    """
+    if not folder_path or not os.path.isdir(folder_path):
+        print(f"[list_files_in_directory] Path is not a valid directory or is empty: '{folder_path}'")
+        return []
+    try:
+        entries = os.listdir(folder_path)
+        # Filter out hidden files/directories and return only files
+        files = [
+            f for f in entries
+            if not f.startswith('.') and os.path.isfile(os.path.join(folder_path, f))
+        ]
+        print(f"[list_files_in_directory] Found files in '{folder_path}': {files}")
+        return files
+    except OSError as e: # Catch potential OS errors like permission denied
+        print(f"[list_files_in_directory] Error listing files in '{folder_path}': {e}")
+        return []
+    except Exception as e: # Catch any other unexpected errors
+        print(f"[list_files_in_directory] Unexpected error for path '{folder_path}': {e}")
+        return []

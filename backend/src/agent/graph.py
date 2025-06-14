@@ -3,7 +3,7 @@ import argparse
 import sys
 import re
 
-from .tools_and_schemas import SearchQueryList, Reflection # Query is not defined there and not needed for this approach
+from .tools_and_schemas import SearchQueryList, Reflection, Query # Ensure Query is imported
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage
 from langgraph.types import Send
@@ -32,7 +32,8 @@ from .utils import (
     get_research_topic,
     insert_citation_markers,
     resolve_urls,
-    read_project_file, # Added import for read_project_file from utils
+    read_project_file,
+    list_files_in_directory, # Added import for list_files_in_directory
 )
 
 load_dotenv()
@@ -46,25 +47,10 @@ genai_client = Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 # Nodes
 def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerationState:
-    """LangGraph node that generates a search queries based on the User's question.
-
-    Uses Gemini 2.0 Flash to create an optimized search query for web research based on
-    the User's question.
-
-    Args:
-        state: Current graph state containing the User's question
-        config: Configuration for the runnable, including LLM provider settings
-
-    Returns:
-        Dictionary with state update, including search_query key containing the generated query
-    """
     configurable = Configuration.from_runnable_config(config)
 
-    # check for custom initial search query count
-    if state.get("initial_search_query_count") is None:
-        state["initial_search_query_count"] = configurable.number_of_initial_queries
-
-    # init Gemini 2.0 Flash
+    # Initialize LLM (ensure this is how it's done, or pass llm if initialized outside)
+    # This was previously outside the if/else, makes sense to have one instance
     llm = ChatGoogleGenerativeAI(
         model=configurable.query_generator_model,
         temperature=1.0,
@@ -73,67 +59,126 @@ def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerati
     )
     structured_llm = llm.with_structured_output(SearchQueryList)
 
-    # Format the prompt
-    current_date = get_current_date() # Keep for the general case
     research_topic_str = get_research_topic(state["messages"])
+    target_folder = state.get("target_folder_path") # Get from state
+    initial_query_count = state.get('initial_search_query_count', configurable.number_of_initial_queries)
 
-    # Specific check for the test file path
-    test_file_pattern = r"['\"]?(backend/test_data/protagonist_info\.txt)['\"]?"
-    match = re.search(test_file_pattern, research_topic_str)
+    # 1. Deterministic path for specific test file (remains)
+    # This regex specifically looks for 'backend/test_data/protagonist_info.txt'
+    test_file_pattern = r"['\"]?(backend/test_data/protagonist_info\.txt)['"]?"
+    specific_test_file_match = re.search(test_file_pattern, research_topic_str)
+    if specific_test_file_match:
+        extracted_path = specific_test_file_match.group(1) # Get the captured path
+        print(f"[generate_query] Deterministic path: Found test file '{extracted_path}' in query: '{research_topic_str}'.")
+        query_obj = Query(query=extracted_path, rationale="Directly extracted from user query for specific test case.")
+        return {"query_list": [query_obj]}
 
-    if match:
-        # If the specific test file path is found in the query,
-        # bypass LLM and directly output this path.
-        extracted_path = match.group(1) # Get the captured group (the path itself)
-        print(f"[generate_query] Deterministic path extraction: Found test file '{extracted_path}' in query.")
-        # 'query_list' should be a list of strings.
-        return {"query_list": [extracted_path]}
-    else:
-        # General LLM-based query generation
-        print("[generate_query] Attempting LLM-based query generation.")
-        # Ensure `formatted_prompt` is defined correctly here based on prior logic for this block
-        # The following block reconstructs the logic for setting formatted_prompt
-        # current_date is already defined at the start of the function.
+    # 2. If target_folder is provided, list files and use LLM to select
+    if target_folder and os.path.isdir(target_folder):
+        print(f"[generate_query] Target folder provided: '{target_folder}'. Listing files.")
+        try:
+            available_files = list_files_in_directory(target_folder) # This is expected to return list of filenames
+            if not available_files:
+                print(f"[generate_query] No files found in folder: '{target_folder}'. Returning empty query list.")
+                return {"query_list": []}
 
-        general_file_path_match_in_else = re.search(r"['\"]?(?:[a-zA-Z0-9._-]+/)*[a-zA-Z0-9._-]+\.[a-zA-Z0-9]+['\"]?", research_topic_str)
-        if general_file_path_match_in_else:
-            extracted_general_path = general_file_path_match_in_else.group(0).strip("'\"")
-            print(f"[generate_query] General file path detected (in else): '{extracted_general_path}'. Refining prompt for LLM.")
+            print(f"[generate_query] Files in '{target_folder}': {available_files}")
+
+            file_list_str = "\n - ".join(available_files)
+            current_date = get_current_date()
+
+            # New prompt for the LLM to select from the list
             formatted_prompt = (
-                f"The user is asking about the file: '{extracted_general_path}'. "
-                f"Your primary task is to confirm this file path. If it seems valid, output it directly as the search query. "
-                f"Only output a single search query containing this exact file path: {extracted_general_path}."
-                f"\nOriginal research topic: {research_topic_str}"
-                f"\nNumber of queries to generate: 1"
+                f"Current date: {current_date}\n"
+                f"User's research question: {research_topic_str}\n"
+                f"I have access to the following files in the folder '{target_folder}':\n - {file_list_str}\n\n"
+                f"Based on the user's question, which of these files should I read to find the answer? "
+                f"List up to {initial_query_count} relevant file(s). "
+                "Your output should be a list of query objects. For each chosen file, the 'query' field in the object "
+                "must be the full absolute path to that file. Construct this absolute path by joining the target folder path with the filename. "
+                "For example, if the target folder is '/path/to/folder' and you choose 'file1.txt' from the list, "
+                "the query string in the Query object must be '/path/to/folder/file1.txt'."
             )
-            state["initial_search_query_count"] = 1
-        else:
-            print("[generate_query] No specific file path detected in query (in else). Using general query writer prompt.")
-            formatted_prompt = query_writer_instructions.format(
-                current_date=current_date, # current_date was defined at the start of the function
-                research_topic=research_topic_str,
-                number_queries=state["initial_search_query_count"],
-            )
-        # End of formatted_prompt setup for this block
 
-        llm_result = structured_llm.invoke(formatted_prompt)
+            print(f"[generate_query] Prompting LLM to select files. Prompt (first 300 chars): {formatted_prompt[:300]}...")
+            llm_output = structured_llm.invoke(formatted_prompt) # llm_output is SearchQueryList
 
-        validated_queries = []
-        if llm_result and llm_result.query: # llm_result.query is List[str]
-            for query_str in llm_result.query:
-                # Simple validation: does it look like a path? (contains '/' or '.' typically)
-                if isinstance(query_str, str) and ('.' in query_str or '/' in query_str) and len(query_str) < 250 and not query_str.endswith("?"):
-                    print(f"[generate_query] LLM generated a potential file path: '{query_str}'")
-                    validated_queries.append(query_str) # Add the string directly
-                else:
-                    print(f"[generate_query] LLM generated a non-path-like query, discarding: '{query_str}'")
+            final_queries = []
+            if llm_output and llm_output.query: # llm_output.query is List[Query]
+                for query_obj in llm_output.query:
+                    # LLM was prompted to return absolute paths.
+                    # Validate that the path starts with target_folder and the filename part is in available_files.
+                    query_path_str = query_obj.query
+                    if isinstance(query_path_str, str) and query_path_str.startswith(target_folder):
+                        # Basic check if filename seems to be from the list
+                        potential_filename = os.path.basename(query_path_str)
+                        if potential_filename in available_files:
+                            print(f"[generate_query] LLM selected valid file: {query_path_str}")
+                            final_queries.append(query_obj) # query_obj is already a Query instance
+                        else:
+                            print(f"[generate_query] LLM selected a file not in the original list, discarding: {query_path_str}")
+                    else:
+                         print(f"[generate_query] LLM selected an invalid (not absolute or wrong base folder) path, discarding: {query_path_str}")
 
-        if not validated_queries:
-            print("[generate_query] LLM did not produce any valid-looking file paths. Returning empty query list.")
-            return {"query_list": []} # Return empty list
-        else:
-            # query_list should be List[str]
-            return {"query_list": validated_queries}
+            if not final_queries:
+                print("[generate_query] LLM did not select any valid files from the provided list.")
+            return {"query_list": final_queries}
+
+        except Exception as e:
+            print(f"[generate_query] Error listing files or processing folder '{target_folder}': {e}")
+            return {"query_list": []}
+
+    # 3. Fallback to general LLM query generation (if no target_folder or it's not a dir)
+    # This includes the simple path validation from previous step.
+    print("[generate_query] No target folder specified or path is invalid. Using general LLM query generation with path filtering.")
+    current_date = get_current_date()
+
+    # Check if research_topic_str itself looks like a specific file path to be directly used (general_file_path_match_in_fallback)
+    # This regex is for more generic paths if user types one directly without specifying a folder.
+    general_path_pattern = r"['"]?((?:[a-zA-Z]:)?[/\a-zA-Z0-9._-]+(?:/[a-zA-Z0-9._-]+)*\.[a-zA-Z0-9]+)['"]?"
+    general_file_path_match = re.search(general_path_pattern, research_topic_str)
+
+    if general_file_path_match:
+        extracted_general_path = general_file_path_match.group(1).strip("'"")
+        # If the query IS a path, maybe the LLM should just confirm it.
+        # Or, if the user is asking a question ABOUT this path.
+        # For now, the prompt asks LLM to confirm it.
+        print(f"[generate_query] General file path detected in query: '{extracted_general_path}'. Refining prompt for LLM.")
+        formatted_prompt = (
+            f"The user's query mentions this file path: '{extracted_general_path}'. "
+            f"Your task is to determine if this is the file to be searched. If it seems to be the correct target, "
+            f"output this exact file path as the search query. "
+            f"If the query is more complex, consider if this path is relevant. "
+            f"Question: {research_topic_str}. "
+            f"Output only one search query object containing the confirmed file path if applicable."
+        )
+        # Force 1 query for this case
+        state["initial_search_query_count"] = 1
+    else:
+        print("[generate_query] No general file path detected in query. Using standard query writer prompt for file discovery.")
+        formatted_prompt = query_writer_instructions.format( # Ensure query_writer_instructions is loaded
+            current_date=current_date,
+            research_topic=research_topic_str,
+            number_queries=initial_query_count,
+        )
+
+    llm_fallback_result = structured_llm.invoke(formatted_prompt) # llm_fallback_result is SearchQueryList
+
+    validated_queries_fallback = []
+    if llm_fallback_result and llm_fallback_result.query: # llm_fallback_result.query is List[Query]
+        for q_obj in llm_fallback_result.query: # q_obj is Query
+            query_str = q_obj.query # This is the string path
+            # Basic validation for path-like strings
+            if isinstance(query_str, str) and ('.' in query_str or '/' in query_str or '\\' in query_str) and len(query_str) < 250 and not query_str.endswith("?"):
+                print(f"[generate_query] Fallback LLM generated potential path: '{query_str}'")
+                validated_queries_fallback.append(q_obj) # Add Query object
+            else:
+                print(f"[generate_query] Fallback LLM discarded non-path-like output: '{query_str}'")
+
+    if not validated_queries_fallback:
+        print("[generate_query] Fallback LLM did not produce any valid-looking file paths.")
+
+    return {"query_list": validated_queries_fallback}
 
 
 def continue_to_web_research(state: QueryGenerationState):
@@ -141,9 +186,11 @@ def continue_to_web_research(state: QueryGenerationState):
 
     This is used to spawn n number of web research nodes, one for each search query.
     """
+    # This node now expects state["query_list"] to be a list of Query objects
+    # The web_research node's input 'search_query' should be a string path.
     return [
-        Send("web_research", {"search_query": search_query, "id": int(idx)})
-        for idx, search_query in enumerate(state["query_list"])
+        Send("web_research", {"search_query": query_obj.query, "id": int(idx)}) # Pass query_obj.query (the string)
+        for idx, query_obj in enumerate(state["query_list"]) # query_list is List[Query]
     ]
 
 
