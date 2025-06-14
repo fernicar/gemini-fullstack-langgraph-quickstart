@@ -65,7 +65,7 @@ def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerati
 
     # 1. Deterministic path for specific test file (remains)
     # This regex specifically looks for 'backend/test_data/protagonist_info.txt'
-    test_file_pattern = r"['\"]?(backend/test_data/protagonist_info\.txt)['"]?"
+    test_file_pattern = r"(?:['"])?(backend/test_data/protagonist_info\.txt)(?:['"])?"
     specific_test_file_match = re.search(test_file_pattern, research_topic_str)
     if specific_test_file_match:
         extracted_path = specific_test_file_match.group(1) # Get the captured path
