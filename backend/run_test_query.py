@@ -63,7 +63,8 @@ def run_test():
         "max_research_loops": 0, # Set to 0 to prevent reflection and further searches after the initial query generation.
         "reasoning_model": "gemini-1.5-flash-latest", # Ensure this model is available
     }
-    config = {"configurable": {"thread_id": thread_id}}
+    from langchain_core.runnables import RunnableConfig
+    config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
 
     print(f"Invoking agent with thread_id: {thread_id}")
     print(f"Target file: {target_file_relative_to_project_root}")
