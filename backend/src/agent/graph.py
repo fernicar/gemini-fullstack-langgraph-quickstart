@@ -1,4 +1,6 @@
 import os
+import argparse
+import sys
 
 from agent.tools_and_schemas import SearchQueryList, Reflection
 from dotenv import load_dotenv
@@ -121,6 +123,24 @@ def read_project_file(file_path: str, node_id: int) -> dict:
             "sources_gathered": [{"type": "file", "source": file_path, "content": error_message, "id": node_id, "error": True}],
             "web_research_result": [error_message]
         }
+
+
+def list_files_in_directory(directory_path: str = ".") -> list[str]:
+    """Lists all files in a given directory.
+
+    Args:
+        directory_path: The path to the directory. Defaults to '.'.
+
+    Returns:
+        A list of file names within the directory.
+        Returns an empty list if the directory does not exist or is not a directory.
+    """
+    try:
+        entries = os.listdir(directory_path)
+        files = [f for f in entries if os.path.isfile(os.path.join(directory_path, f))]
+        return files
+    except (FileNotFoundError, NotADirectoryError):
+        return []
 
 
 def web_research(state: WebSearchState, config: RunnableConfig) -> OverallState:
@@ -303,3 +323,42 @@ builder.add_conditional_edges(
 builder.add_edge("finalize_answer", END)
 
 graph = builder.compile(name="pro-search-agent")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Pro Search Agent CLI")
+    parser.add_argument(
+        "--test-file-access",
+        action="store",
+        nargs="?",
+        default=None,
+        const=".",  # Default directory if flag is present without a value
+        help="Test file access by listing files and reading the first file. Optionally provide a directory path.",
+    )
+    cli_args = parser.parse_args()
+
+    if cli_args.test_file_access is not None:
+        directory_path = cli_args.test_file_access
+        print(f"Files in directory '{directory_path}':")
+
+        files = list_files_in_directory(directory_path)
+        for f_name in files:
+            print(f"- {f_name}")
+
+        if files:
+            first_file_path = os.path.join(directory_path, files[0])
+            print(f"\nReading content of the first file: '{first_file_path}'")
+
+            read_result = read_project_file(first_file_path, node_id=0)
+
+            content = read_result['web_research_result'][0]
+            source_info = read_result['sources_gathered'][0]
+
+            print("\nContent:")
+            print(content)
+
+            if source_info.get('error'):
+                print("\nNote: There was an error reading this file.")
+        else:
+            print("No files found in the directory.")
+
+        sys.exit(0)  # Exit after performing the test file access
