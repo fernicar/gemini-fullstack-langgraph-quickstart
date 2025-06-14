@@ -63,14 +63,14 @@ class BackendThread(QThread):
             selected_model_display_name = self.model_name
             # Use a default if not found (i.e., pass the original name)
             api_model_name = MODEL_API_MAP.get(selected_model_display_name, selected_model_display_name)
-            
+
             payload = {
                 "input": {
                     "messages": [{"type": "human", "content": self.query, "id": str(uuid.uuid4())[:8]}],
                     "initial_search_query_count": self.effort_params["initial_search_query_count"],
                     "max_research_loops": self.effort_params["max_research_loops"],
-                    "reasoning_model": api_model_name, 
-                    "search_query": [], 
+                    "reasoning_model": api_model_name,
+                    "search_query": [],
                     "web_research_result": [],
                     "sources_gathered": [],
                     "research_loop_count": 0,
@@ -80,7 +80,7 @@ class BackendThread(QThread):
                     "configurable": {"thread_id": self.thread_id}
                 }
             }
-            
+
             self.new_activity_signal.emit(f"Connecting to backend at {backend_url} with thread_id: {self.thread_id}")
             # self.new_activity_signal.emit(f"Payload: {json.dumps(payload, indent=2)}") # Maybe too verbose for default log
 
@@ -98,7 +98,7 @@ class BackendThread(QThread):
                     if not self._is_running:
                         self.new_activity_signal.emit("Stream processing interrupted by client.")
                         break
-                    
+
                     if line:
                         try:
                             event_data = json.loads(line)
@@ -114,7 +114,7 @@ class BackendThread(QThread):
                                 message_found_in_line = True # Assume event line is handled
                                 activity_to_log = f"Event: {event_type}, Node: {run_name}"
                                 chunk_content = data_payload.get("chunk", {}).get("content") if isinstance(data_payload.get("chunk"), dict) else None
-                                
+
                                 if event_type == "on_chat_model_stream" and chunk_content:
                                     self.new_message_signal.emit("ai_partial", chunk_content)
                                     activity_to_log += f", AI_Chunk: {str(chunk_content)[:30]}..."
@@ -133,7 +133,7 @@ class BackendThread(QThread):
                                             if msg.get("type") == "ai" or msg.get("type") == "assistant":
                                                 self.new_message_signal.emit("ai_final", msg.get("content", ""))
                                                 activity_to_log += f", FinalAIMessage (on_chain_end): {str(msg.get('content',''))[:30]}..."
-                                                break 
+                                                break
                                     elif isinstance(final_output_data, str):
                                          self.new_message_signal.emit("ai_final", final_output_data)
                                          activity_to_log += f", FinalOutputStr (on_chain_end): {final_output_data[:30]}..."
@@ -149,11 +149,11 @@ class BackendThread(QThread):
                                             ai_content = msg_data.get("content", "")
                                             self.new_message_signal.emit("ai_final", ai_content)
                                             activity_to_log = f"FinalAIMessage (from output.messages): {ai_content[:30]}..."
-                                            break 
-                                    if not activity_to_log: 
+                                            break
+                                    if not activity_to_log:
                                         activity_to_log = f"OutputFieldParsed: Parsed output.messages but no AI message found."
 
-                                elif not activity_to_log : 
+                                elif not activity_to_log :
                                      activity_to_log = f"OutputFieldContent: {str(output_content)[:100]}"
 
 
@@ -166,12 +166,12 @@ class BackendThread(QThread):
                                         if isinstance(msg, dict) and (msg.get("type") == "ai" or msg.get("type") == "assistant"):
                                             self.new_message_signal.emit("ai_final", msg.get("content", ""))
                                             activity_to_log = f"DirectAIMessage (from root.messages): {str(msg.get('content',''))[:30]}..."
-                                            break 
+                                            break
                                  if not activity_to_log:
                                     activity_to_log = f"RootMessagesParsed: Parsed root.messages but no AI message found."
 
 
-                            if not message_found_in_line or not activity_to_log: 
+                            if not message_found_in_line or not activity_to_log:
                                 activity_to_log = f"UnknownStreamObjectOrNoRelevantData: {str(event_data)[:100]}"
 
                             if activity_to_log:
@@ -202,7 +202,7 @@ class MainWindow(QMainWindow):
         self.is_processing = False # Initialize the flag
         self.setWindowTitle("TINS Agent PySide6 GUI")
         self.setGeometry(100, 100, 1200, 800)
-        
+
         # --- Menu Bar ---
         self.menu_bar = QMenuBar()
         self.file_menu = self.menu_bar.addMenu("&File")
@@ -248,7 +248,7 @@ class MainWindow(QMainWindow):
 
         self.folder_path_input = QLineEdit()
         self.folder_path_input.setPlaceholderText("Select a folder containing files for research...")
-        
+
         # --- Set default folder path ---
         default_folder_relative = os.path.join("backend", "test_data")
         default_folder_absolute = os.path.abspath(default_folder_relative)
@@ -258,13 +258,13 @@ class MainWindow(QMainWindow):
             print(f"[WARN] Default research folder not found: {default_folder_absolute}")
         # -----------------------------
 
-        self.folder_path_input.setMinimumWidth(250) 
+        self.folder_path_input.setMinimumWidth(250)
         self.controls_layout.addWidget(self.folder_path_input)
 
         self.browse_folder_button = QPushButton("Browse...")
         self.browse_folder_button.clicked.connect(self.handle_browse_folder)
         self.controls_layout.addWidget(self.browse_folder_button)
-        
+
         self.controls_layout.addSpacing(20) # Add a little space before "Effort"
 
         self.effort_label = QLabel("Effort:")
@@ -323,7 +323,7 @@ class MainWindow(QMainWindow):
         if self.is_processing: # Use the flag to determine state
             # Stop Search
             if self.backend_thread and self.backend_thread.isRunning():
-                self.backend_thread.stop() 
+                self.backend_thread.stop()
                 self.status_bar.showMessage("Stop request sent to backend.", 3000)
                 self.activity_timeline.addItem("Stop request sent to backend.")
                 # UI reset and self.is_processing = False will be handled by signals
@@ -345,16 +345,16 @@ class MainWindow(QMainWindow):
 
             # Disable UI elements
             self.query_input.setEnabled(False)
-            self.folder_path_input.setEnabled(False) 
-            self.browse_folder_button.setEnabled(False) 
+            self.folder_path_input.setEnabled(False)
+            self.browse_folder_button.setEnabled(False)
             self.effort_combo.setEnabled(False)
             self.model_combo.setEnabled(False)
             self.new_search_button.setEnabled(False)
             self.new_search_action.setEnabled(False)
-            
+
             self._update_chat_display("human", query_text) # Display human message
             self.query_input.clear() # Clear input after grabbing text
-            self.current_ai_message = "" 
+            self.current_ai_message = ""
 
             self.status_bar.showMessage("Processing query...")
             selected_model_display_name = self.model_combo.currentText() # Get for logging
@@ -365,9 +365,9 @@ class MainWindow(QMainWindow):
             thread_id = str(uuid.uuid4())
 
             self.backend_thread = BackendThread(
-                query_text, 
-                selected_effort_params, 
-                selected_model_display_name, 
+                query_text,
+                selected_effort_params,
+                selected_model,
                 thread_id,
                 target_folder # Pass the new folder path
             )
@@ -376,7 +376,7 @@ class MainWindow(QMainWindow):
             self.backend_thread.processing_error_signal.connect(self._handle_processing_error)
             self.backend_thread.processing_finished_signal.connect(self._handle_processing_finished)
             self.backend_thread.finished.connect(self._on_thread_actually_finished) # For cleanup
-            
+
             self.backend_thread.start()
 
     @Slot(str, str)
@@ -402,7 +402,7 @@ class MainWindow(QMainWindow):
                 # Clear current_ai_message if it was being built, and append the final one.
                 # This might cause a slight flicker or redraw of the AI message.
                 # A truly smooth stream would require more complex QTextCursor manipulation.
-                
+
                 # Simplification: If there was a partial stream, assume `content` is the last chunk.
                 if self.current_ai_message and content != self.current_ai_message : # if content is truly just the last part
                     self.chat_display_area.insertPlainText(content)
@@ -435,7 +435,7 @@ class MainWindow(QMainWindow):
              self.chat_display_area.append("<br>") # Add a line break if it was streaming.
         self.current_ai_message = ""
         self._reset_ui_after_processing()
-        
+
     @Slot()
     def _on_thread_actually_finished(self):
         # This slot is connected to QThread.finished signal
@@ -448,8 +448,8 @@ class MainWindow(QMainWindow):
         self.is_processing = False # Reset the flag
         self.search_stop_button.setText("Search")
         self.query_input.setEnabled(True)
-        self.folder_path_input.setEnabled(True) 
-        self.browse_folder_button.setEnabled(True) 
+        self.folder_path_input.setEnabled(True)
+        self.browse_folder_button.setEnabled(True)
         self.effort_combo.setEnabled(True)
         self.model_combo.setEnabled(True)
         self.new_search_button.setEnabled(True)
@@ -496,7 +496,7 @@ class MainWindow(QMainWindow):
 
         self.activity_timeline.addItem("New search session started. Enter your query.")
         self.status_bar.showMessage("Ready for new search.", 5000)
-        
+
     @Slot()
     def handle_copy_ai_message(self):
         selected_text = self.chat_display_area.textCursor().selectedText()
