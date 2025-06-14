@@ -372,7 +372,7 @@ class MainWindow(QMainWindow):
         # This slot is connected to QThread.finished signal
         # It's a good place for any final cleanup of the thread object itself
         if self.backend_thread: # Check if it wasn't already set to None by stop action
-            self.activity_timeline.addItem(f"Backend thread ({self.backend_thread.objectName() if self.backend_thread.objectName() else 'ID: '+str(self.backend_thread.currentThreadId())}) has finished execution.")
+            self.activity_timeline.addItem(f"Backend thread ({self.backend_thread.objectName() if self.backend_thread.objectName() else 'ID: '+str(self.backend_thread.currentThread())}) has finished execution.")
         self.backend_thread = None # Ensure it's cleared
 
     def _reset_ui_after_processing(self):
